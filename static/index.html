@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!--
+    ============================================================================
+    DIVIDEND HUNTER PWA
+    ============================================================================
+    A tinder-style swipe interface for discovering high-yield S&P 500 stocks.
+    
+    Design Philosophy:
+    - Dark theme with gold accents (money/premium feel)
+    - Card-based swipe UI with gesture support
+    - Offline-first with aggressive caching
+    - Data persistence via IndexedDB
+    
+    Author Notes:
+    - The service worker handles all caching strategy
+    - IndexedDB stores portfolio + swipe history + trend data
+    - API calls are throttled and cached to respect rate limits
+    ============================================================================
+    -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0a0a0f">
+    <meta name="description" content="Swipe through S&P 500 dividend stocks. Find high-yield opportunities with trend analysis.">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Favicon and Icons -->
+    <link rel="icon" type="image/svg+xml" href="icons/favicon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/icon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+    
+    <!-- iOS PWA settings -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Dividend Hunter">
+    
+    <!-- Preconnect to API -->
+    <link rel="preconnect" href="/api">
+    
+    <!-- Fonts - Using distinctive typefaces -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <title>Dividend Hunter</title>
+    
+    <!-- Critical CSS inlined for fast first paint -->
+    <style>
+        /* 
+        ========================================
+        CSS CUSTOM PROPERTIES
+        ========================================
+        Centralized theming - edit these to change the whole vibe.
+        Current: Dark luxury with gold/amber accents
+        */
+        :root {
+            /* Background layers - almost black with subtle depth */
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a24;
+            --bg-card-hover: #222230;
+            
+            /* Accent colors - gold spectrum for that money feel */
+            --accent-primary: #d4a853;
+            --accent-secondary: #f4d03f;
+            --accent-muted: #8b7355;
+            
+            /* Semantic colors */
+            --positive: #2ecc71;
+            --negative: #e74c3c;
+            --warning: #f39c12;
+            
+            /* Text hierarchy */
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0b0;
+            --text-muted: #606070;
+            
+            /* Spacing scale (8px base) */
+            --space-xs: 4px;
+            --space-sm: 8px;
+            --space-md: 16px;
+            --space-lg: 24px;
+            --space-xl: 32px;
+            --space-2xl: 48px;
+            
+            /* Border radius */
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 20px;
+            --radius-full: 9999px;
+            
+            /* Shadows */
+            --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.4);
+            --shadow-elevated: 0 8px 40px rgba(0, 0, 0, 0.6);
+            
+            /* Typography */
+            --font-display: 'Space Mono', monospace;
+            --font-body: 'DM Sans', sans-serif;
+            
+            /* Transitions */
+            --transition-fast: 150ms ease;
+            --transition-medium: 300ms ease;
+            --transition-slow: 500ms ease;
+            
+            /* Z-index layers */
+            --z-card: 10;
+            --z-modal: 100;
+            --z-toast: 200;
+            --z-nav: 50;
+        }
+
+        /* 
+        ========================================
+        RESET & BASE STYLES
+        ========================================
+        */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            font-size: 16px;
+            -webkit-text-size-adjust: 100%;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            min-height: 100dvh; /* Dynamic viewport for mobile */
+            overflow-x: hidden;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* App container - full viewport with safe areas for notches */
+        #app {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            min-height: 100dvh;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* 
+        ========================================
+        LOADING STATE
+        ========================================
+        Shows while JS initializes
+        */
+        .app-loader {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-primary);
+            z-index: 1000;
+            transition: opacity var(--transition-medium);
+        }
+
+        .app-loader.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .loader-logo {
+            width: 80px;
+            height: 80px;
+            margin-bottom: var(--space-lg);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .loader-text {
+            font-family: var(--font-display);
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+        }
+
+        /* 
+        ========================================
+        HEADER
+        ========================================
+        Fixed top bar with title and filters
+        */
+        .app-header {
+            position: sticky;
+            top: 0;
+            z-index: var(--z-nav);
+            background: linear-gradient(to bottom, var(--bg-primary) 0%, var(--bg-primary) 70%, transparent 100%);
+            padding: var(--space-md) var(--space-lg);
+            padding-top: calc(var(--space-md) + env(safe-area-inset-top));
+        }
+
+        .header-content {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        .app-title {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--accent-primary);
+            letter-spacing: -0.5px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: var(--space-sm);
+        }
+
+        .icon-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: var(--radius-full);
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+        }
+
+        .icon-btn:hover {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+
+        .icon-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        /* 
+        ========================================
+        FILTER BAR
+        ========================================
+        Category toggle pills
+        */
+        .filter-bar {
+            display: flex;
+            gap: var(--space-sm);
+            padding: var(--space-sm) var(--space-lg);
+            max-width: 500px;
+            margin: 0 auto;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+
+        .filter-bar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .filter-pill {
+            flex-shrink: 0;
+            padding: var(--space-sm) var(--space-md);
+            border: 1px solid var(--bg-card);
+            border-radius: var(--radius-full);
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            white-space: nowrap;
+        }
+
+        .filter-pill:hover {
+            border-color: var(--accent-muted);
+            color: var(--text-primary);
+        }
+
+        .filter-pill.active {
+            background: var(--accent-primary);
+            border-color: var(--accent-primary);
+            color: var(--bg-primary);
+        }
+
+        /* 
+        ========================================
+        MAIN CONTENT AREA
+        ========================================
+        Views are swapped in/out via JS
+        */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: var(--space-md);
+            padding-bottom: 100px; /* Space for bottom nav */
+        }
+
+        .view {
+            display: none;
+            flex: 1;
+            flex-direction: column;
+            max-width: 500px;
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        .view.active {
+            display: flex;
+        }
+
+        /* 
+        ========================================
+        CARD STACK (Swipe View)
+        ========================================
+        The tinder-style card stack
+        */
+        .card-stack {
+            position: relative;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 400px;
+        }
+
+        .stock-card {
+            position: absolute;
+            width: 100%;
+            max-width: 380px;
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-card);
+            overflow: hidden;
+            cursor: grab;
+            touch-action: pan-y;
+            user-select: none;
+            transition: transform var(--transition-medium), opacity var(--transition-medium);
+        }
+
+        .stock-card:active {
+            cursor: grabbing;
+        }
+
+        /* Card stacking - cards behind are scaled down and offset */
+        .stock-card[data-index="0"] {
+            z-index: 3;
+        }
+
+        .stock-card[data-index="1"] {
+            z-index: 2;
+            transform: scale(0.95) translateY(10px);
+            opacity: 0.7;
+        }
+
+        .stock-card[data-index="2"] {
+            z-index: 1;
+            transform: scale(0.9) translateY(20px);
+            opacity: 0.4;
+        }
+
+        /* Swipe indicators that appear during drag */
+        .swipe-indicator {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            padding: var(--space-md) var(--space-lg);
+            border-radius: var(--radius-md);
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            opacity: 0;
+            transition: opacity var(--transition-fast);
+            pointer-events: none;
+        }
+
+        .swipe-indicator.like {
+            right: 20px;
+            background: var(--positive);
+            color: white;
+            transform: translateY(-50%) rotate(15deg);
+        }
+
+        .swipe-indicator.pass {
+            left: 20px;
+            background: var(--negative);
+            color: white;
+            transform: translateY(-50%) rotate(-15deg);
+        }
+
+        /* 
+        ========================================
+        STOCK CARD CONTENT
+        ========================================
+        */
+        .card-header {
+            padding: var(--space-lg);
+            background: linear-gradient(135deg, var(--bg-card-hover) 0%, var(--bg-card) 100%);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .card-ticker-row {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: var(--space-sm);
+        }
+
+        .card-ticker {
+            font-family: var(--font-display);
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -1px;
+        }
+
+        .card-category-badge {
+            padding: var(--space-xs) var(--space-sm);
+            border-radius: var(--radius-sm);
+            font-size: 0.625rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .card-category-badge.immediate {
+            background: rgba(46, 204, 113, 0.2);
+            color: var(--positive);
+        }
+
+        .card-category-badge.longshot {
+            background: rgba(243, 156, 18, 0.2);
+            color: var(--warning);
+        }
+
+        .card-category-badge.balanced {
+            background: rgba(212, 168, 83, 0.2);
+            color: var(--accent-primary);
+        }
+
+        .card-name {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: var(--space-xs);
+        }
+
+        .card-sector {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Main yield display - the star of the show */
+        .card-yield-section {
+            padding: var(--space-xl) var(--space-lg);
+            text-align: center;
+            background: radial-gradient(ellipse at center, rgba(212, 168, 83, 0.1) 0%, transparent 70%);
+        }
+
+        .yield-value {
+            font-family: var(--font-display);
+            font-size: 4rem;
+            font-weight: 700;
+            color: var(--accent-primary);
+            line-height: 1;
+        }
+
+        .yield-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-top: var(--space-sm);
+        }
+
+        /* Metrics grid */
+        .card-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1px;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .metric-item {
+            padding: var(--space-md);
+            background: var(--bg-card);
+            text-align: center;
+        }
+
+        .metric-value {
+            font-family: var(--font-display);
+            font-size: 1.125rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .metric-value.positive {
+            color: var(--positive);
+        }
+
+        .metric-value.negative {
+            color: var(--negative);
+        }
+
+        .metric-label {
+            font-size: 0.625rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: var(--space-xs);
+        }
+
+        /* Safety score bar */
+        .card-safety {
+            padding: var(--space-md) var(--space-lg);
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .safety-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--space-sm);
+        }
+
+        .safety-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .safety-value {
+            font-family: var(--font-display);
+            font-size: 0.875rem;
+            font-weight: 700;
+        }
+
+        .safety-bar {
+            height: 6px;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-full);
+            overflow: hidden;
+        }
+
+        .safety-fill {
+            height: 100%;
+            border-radius: var(--radius-full);
+            transition: width var(--transition-medium);
+        }
+
+        /* 
+        ========================================
+        SWIPE ACTION BUTTONS
+        ========================================
+        */
+        .action-buttons {
+            display: flex;
+            justify-content: center;
+            gap: var(--space-xl);
+            padding: var(--space-lg);
+        }
+
+        .action-btn {
+            width: 60px;
+            height: 60px;
+            border-radius: var(--radius-full);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+        }
+
+        .action-btn svg {
+            width: 28px;
+            height: 28px;
+        }
+
+        .action-btn.pass {
+            background: rgba(231, 76, 60, 0.1);
+            color: var(--negative);
+            border: 2px solid var(--negative);
+        }
+
+        .action-btn.pass:hover {
+            background: var(--negative);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .action-btn.undo {
+            width: 48px;
+            height: 48px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid var(--bg-card);
+        }
+
+        .action-btn.undo:hover {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+
+        .action-btn.like {
+            background: rgba(46, 204, 113, 0.1);
+            color: var(--positive);
+            border: 2px solid var(--positive);
+        }
+
+        .action-btn.like:hover {
+            background: var(--positive);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        /* 
+        ========================================
+        PORTFOLIO VIEW
+        ========================================
+        */
+        .portfolio-header {
+            margin-bottom: var(--space-lg);
+        }
+
+        .portfolio-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: var(--space-md);
+            margin-bottom: var(--space-lg);
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            padding: var(--space-lg);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-primary);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: var(--space-xs);
+        }
+
+        .portfolio-list {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-sm);
+        }
+
+        .portfolio-item {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            padding: var(--space-md);
+            transition: background var(--transition-fast);
+        }
+
+        .portfolio-item:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .portfolio-item-ticker {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            min-width: 60px;
+        }
+
+        .portfolio-item-name {
+            flex: 1;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .portfolio-item-yield {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--positive);
+        }
+
+        .portfolio-item-remove {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: var(--radius-full);
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+        }
+
+        .portfolio-item-remove:hover {
+            background: rgba(231, 76, 60, 0.2);
+            color: var(--negative);
+        }
+
+        .portfolio-empty {
+            text-align: center;
+            padding: var(--space-2xl);
+            color: var(--text-muted);
+        }
+
+        .portfolio-empty-icon {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto var(--space-md);
+            opacity: 0.5;
+        }
+
+        /* 
+        ========================================
+        TRENDS VIEW
+        ========================================
+        */
+        .trends-view .view-title {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: var(--space-lg);
+        }
+
+        .trend-chart-container {
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            padding: var(--space-lg);
+            margin-bottom: var(--space-lg);
+        }
+
+        .trend-chart {
+            width: 100%;
+            height: 200px;
+        }
+
+        /* 
+        ========================================
+        SETTINGS VIEW
+        ========================================
+        */
+        .settings-section {
+            margin-bottom: var(--space-xl);
+        }
+
+        .settings-title {
+            font-family: var(--font-display);
+            font-size: 0.875rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: var(--space-md);
+        }
+
+        .settings-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--space-md);
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            margin-bottom: var(--space-sm);
+        }
+
+        .settings-item-label {
+            font-size: 0.875rem;
+            color: var(--text-primary);
+        }
+
+        .settings-item-desc {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: var(--space-xs);
+        }
+
+        /* Toggle switch */
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 28px;
+        }
+
+        .toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-full);
+            transition: all var(--transition-fast);
+        }
+
+        .toggle-slider::before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            bottom: 3px;
+            background: var(--text-primary);
+            border-radius: 50%;
+            transition: all var(--transition-fast);
+        }
+
+        .toggle input:checked + .toggle-slider {
+            background: var(--accent-primary);
+        }
+
+        .toggle input:checked + .toggle-slider::before {
+            transform: translateX(20px);
+        }
+
+        /* 
+        ========================================
+        BOTTOM NAVIGATION
+        ========================================
+        */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-secondary);
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: env(safe-area-inset-bottom);
+            z-index: var(--z-nav);
+        }
+
+        .nav-items {
+            display: flex;
+            justify-content: space-around;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        .nav-item {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: var(--space-md);
+            color: var(--text-muted);
+            text-decoration: none;
+            background: none;
+            border: none;
+            cursor: pointer;
+            transition: color var(--transition-fast);
+        }
+
+        .nav-item:hover,
+        .nav-item.active {
+            color: var(--accent-primary);
+        }
+
+        .nav-item svg {
+            width: 24px;
+            height: 24px;
+            margin-bottom: var(--space-xs);
+        }
+
+        .nav-item span {
+            font-size: 0.625rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Portfolio badge for count */
+        .nav-badge {
+            position: absolute;
+            top: 4px;
+            right: calc(50% - 20px);
+            min-width: 18px;
+            height: 18px;
+            padding: 0 5px;
+            background: var(--accent-primary);
+            border-radius: var(--radius-full);
+            font-size: 0.625rem;
+            font-weight: 700;
+            color: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 
+        ========================================
+        TOAST NOTIFICATIONS
+        ========================================
+        */
+        .toast-container {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: var(--z-toast);
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-sm);
+            pointer-events: none;
+        }
+
+        .toast {
+            padding: var(--space-md) var(--space-lg);
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-elevated);
+            font-size: 0.875rem;
+            color: var(--text-primary);
+            opacity: 0;
+            transform: translateY(20px);
+            animation: toastIn 300ms ease forwards;
+        }
+
+        .toast.success {
+            border-left: 3px solid var(--positive);
+        }
+
+        .toast.error {
+            border-left: 3px solid var(--negative);
+        }
+
+        @keyframes toastIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 
+        ========================================
+        OFFLINE INDICATOR
+        ========================================
+        */
+        .offline-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: var(--space-sm);
+            background: var(--warning);
+            color: var(--bg-primary);
+            text-align: center;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            z-index: var(--z-toast);
+            transform: translateY(-100%);
+            transition: transform var(--transition-medium);
+        }
+
+        .offline-banner.visible {
+            transform: translateY(0);
+        }
+
+        /* 
+        ========================================
+        MODAL (for stock details)
+        ========================================
+        */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: var(--z-modal);
+            opacity: 0;
+            visibility: hidden;
+            transition: all var(--transition-medium);
+        }
+
+        .modal-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal-content {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            max-height: 85vh;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+            overflow: hidden;
+            transform: translateY(100%);
+            transition: transform var(--transition-medium);
+        }
+
+        .modal-overlay.visible .modal-content {
+            transform: translateY(0);
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--space-lg);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .modal-title {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: var(--radius-full);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-body {
+            padding: var(--space-lg);
+            overflow-y: auto;
+            max-height: calc(85vh - 80px);
+        }
+
+        /* 
+        ========================================
+        RESPONSIVE ADJUSTMENTS
+        ========================================
+        */
+        @media (min-width: 768px) {
+            .main-content {
+                padding: var(--space-xl);
+            }
+
+            .stock-card {
+                max-width: 420px;
+            }
+
+            .yield-value {
+                font-size: 5rem;
+            }
+        }
+    </style>
+    
+    <!-- Main stylesheet (non-critical) - loaded async -->
+    <link rel="stylesheet" href="css/styles.css" media="print" onload="this.media='all'">
+</head>
+<body>
+    <!-- Offline indicator banner -->
+    <div class="offline-banner" id="offlineBanner">
+        <span>You're offline — viewing cached data</span>
+    </div>
+
+    <!-- Loading state while JS initializes -->
+    <div class="app-loader" id="appLoader">
+        <svg class="loader-logo" viewBox="0 0 100 100" fill="none">
+            <circle cx="50" cy="50" r="45" stroke="#d4a853" stroke-width="2" fill="none"/>
+            <path d="M50 20 L50 50 L70 65" stroke="#d4a853" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <text x="50" y="85" text-anchor="middle" fill="#d4a853" font-family="Space Mono" font-size="10" font-weight="bold">$</text>
+        </svg>
+        <div class="loader-text">Loading dividends...</div>
+    </div>
+
+    <!-- Main app container -->
+    <div id="app">
+        <!-- Header with title and actions -->
+        <header class="app-header">
+            <div class="header-content">
+                <h1 class="app-title">DIVIDEND HUNTER</h1>
+                <div class="header-actions">
+            <!-- Update Button (Initially hidden, shown via JS if stale) -->
+            <button id="updateDataBtn" class="icon-btn" style="display: none; width: auto; padding: 0 12px; gap: 8px; font-weight: 600; font-size: 0.8rem; background: var(--bg-card); border: 1px solid var(--accent-primary); color: var(--accent-primary);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+                </svg>
+                <span>Update</span>
+            </button>
+            <div class="header-actions">
+                    <button class="icon-btn" id="refreshBtn" title="Refresh data">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M23 4v6h-6"></path>
+                            <path d="M1 20v-6h6"></path>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+                            <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Filter pills - visible on discover view -->
+        <div class="filter-bar" id="filterBar">
+            <button class="filter-pill active" data-filter="all">All</button>
+            <button class="filter-pill" data-filter="immediate">Immediate Return</button>
+            <button class="filter-pill" data-filter="longshot">Long Shot</button>
+            <button class="filter-pill" data-filter="balanced">Balanced</button>
+        </div>
+
+        <!-- Main content area - views swapped via JS -->
+        <main class="main-content">
+            
+            <!-- DISCOVER VIEW - Swipe cards -->
+            <section class="view active" id="discoverView" data-view="discover">
+                <div class="card-stack" id="cardStack">
+                    <!-- Cards injected by JS -->
+                </div>
+                
+                <div class="action-buttons">
+                    <button class="action-btn pass" id="passBtn" title="Pass (Swipe Left)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                    <button class="action-btn undo" id="undoBtn" title="Undo last swipe">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 7v6h6"></path>
+                            <path d="M3 13a9 9 0 1 0 3-7.7L3 7"></path>
+                        </svg>
+                    </button>
+                    <button class="action-btn like" id="likeBtn" title="Add to Portfolio (Swipe Right)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </section>
+
+            <!-- PORTFOLIO VIEW -->
+            <section class="view" id="portfolioView" data-view="portfolio">
+                <div class="portfolio-header">
+                    <div class="portfolio-stats">
+                        <div class="stat-card">
+                            <div class="stat-value" id="portfolioCount">0</div>
+                            <div class="stat-label">Stocks Saved</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="avgYield">0%</div>
+                            <div class="stat-label">Avg Yield</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="portfolio-list" id="portfolioList">
+                    <!-- Portfolio items injected by JS -->
+                </div>
+                
+                <div class="portfolio-empty" id="portfolioEmpty" style="display: none;">
+                    <svg class="portfolio-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                    </svg>
+                    <p>Your portfolio is empty</p>
+                    <p style="margin-top: 8px; font-size: 0.75rem;">Swipe right on stocks you like</p>
+                </div>
+            </section>
+
+            <!-- TRENDS VIEW -->
+            <section class="view" id="trendsView" data-view="trends">
+                <h2 class="view-title">Dividend Trends</h2>
+                <div class="trend-chart-container">
+                    <canvas class="trend-chart" id="trendChart"></canvas>
+                </div>
+                <div id="trendList">
+                    <!-- Trend analysis items -->
+                </div>
+            </section>
+
+            <!-- SETTINGS VIEW -->
+            <section class="view" id="settingsView" data-view="settings">
+                <div class="settings-section">
+                    <h3 class="settings-title">Filters</h3>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Minimum Yield</div>
+                            <div class="settings-item-desc">Only show stocks with yield above threshold</div>
+                        </div>
+                        <select id="minYieldSetting" style="background: var(--bg-secondary); border: none; color: var(--text-primary); padding: 8px; border-radius: 8px;">
+                            <option value="0">Any</option>
+                            <option value="1">1%+</option>
+                            <option value="2">2%+</option>
+                            <option value="3">3%+</option>
+                            <option value="4">4%+</option>
+                            <option value="5">5%+</option>
+                        </select>
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Minimum Safety Score</div>
+                            <div class="settings-item-desc">Filter by dividend safety rating</div>
+                        </div>
+                        <select id="minSafetySetting" style="background: var(--bg-secondary); border: none; color: var(--text-primary); padding: 8px; border-radius: 8px;">
+                            <option value="0">Any</option>
+                            <option value="40">40+</option>
+                            <option value="50">50+</option>
+                            <option value="60">60+</option>
+                            <option value="70">70+</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3 class="settings-title">Data</h3>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Auto-refresh</div>
+                            <div class="settings-item-desc">Fetch fresh data every hour</div>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="autoRefreshSetting" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Clear Swipe History</div>
+                            <div class="settings-item-desc">Reset all passed stocks</div>
+                        </div>
+                        <button id="clearHistoryBtn" style="background: var(--negative); border: none; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;">
+                            Clear
+                        </button>
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Export Portfolio</div>
+                            <div class="settings-item-desc">Download as CSV</div>
+                        </div>
+                        <button id="exportBtn" style="background: var(--accent-primary); border: none; color: var(--bg-primary); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;">
+                            Export
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3 class="settings-title">About</h3>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Dividend Hunter v1.0.0</div>
+                            <div class="settings-item-desc">Data from Yahoo Finance via yfinance</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom navigation -->
+        <nav class="bottom-nav">
+            <div class="nav-items">
+                <button class="nav-item active" data-view="discover">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span>Discover</span>
+                </button>
+                <button class="nav-item" data-view="portfolio" style="position: relative;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                    </svg>
+                    <span>Portfolio</span>
+                    <span class="nav-badge" id="portfolioBadge" style="display: none;">0</span>
+                </button>
+                <button class="nav-item" data-view="trends">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <span>Trends</span>
+                </button>
+                <button class="nav-item" data-view="settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    <span>Settings</span>
+                </button>
+            </div>
+        </nav>
+    </div>
+
+    <!-- Toast notification container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Stock detail modal -->
+    <div class="modal-overlay" id="stockModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">Stock Details</h2>
+                <button class="modal-close" id="modalClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Detail content injected by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- App scripts - order matters -->
+    <script src="js/config.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/cards.js"></script>
+    <script src="js/app.js"></script>
+
+    <!-- Service Worker registration -->
+    <script>
+        // Register service worker for offline support
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                try {
+                    const registration = await navigator.serviceWorker.register('/sw.js');
+                    console.log('[SW] Registered:', registration.scope);
+                } catch (error) {
+                    console.error('[SW] Registration failed:', error);
+                }
+            });
+        }
+    </script>
+</body>
+</html>
