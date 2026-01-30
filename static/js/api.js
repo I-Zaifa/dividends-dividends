@@ -12,21 +12,21 @@
  * if the backend is temporarily unavailable.
  */
 
-const DividendAPI = (function() {
+const DividendAPI = (function () {
     'use strict';
 
     // ========================================================================
     // CONFIGURATION
     // ========================================================================
-    
+
     // Base URL - set this to your deployed backend
     // For local dev: '/api'
     // For production: 'https://your-backend.onrender.com/api'
     const BASE_URL = window.DIVIDEND_API_URL || '/api';
-    
+
     // Request timeout in milliseconds
-    const TIMEOUT = 30000;
-    
+    const TIMEOUT = 60000; // Increased to 60s
+
     // Retry configuration
     const MAX_RETRIES = 2;
     const RETRY_DELAY = 1000;
@@ -48,7 +48,7 @@ const DividendAPI = (function() {
     // ========================================================================
     // HTTP HELPERS
     // ========================================================================
-    
+
     /**
      * Makes a fetch request with timeout and error handling.
      */
@@ -78,11 +78,11 @@ const DividendAPI = (function() {
         const url = queryString ? `${BASE_URL}${endpoint}?${queryString}` : `${BASE_URL}${endpoint}`;
 
         let lastError;
-        
+
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 const response = await fetchWithTimeout(url);
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
@@ -90,7 +90,7 @@ const DividendAPI = (function() {
                 return await response.json();
             } catch (error) {
                 lastError = error;
-                
+
                 // Don't retry if we're offline or it's a client error
                 if (!isOnline || (error.name === 'AbortError')) {
                     break;
@@ -116,7 +116,7 @@ const DividendAPI = (function() {
     // ========================================================================
     // STOCK DATA ENDPOINTS
     // ========================================================================
-    
+
     /**
      * Fetches dividend stocks with optional filters.
      * Implements offline-first: tries network, falls back to cache.
@@ -150,15 +150,50 @@ const DividendAPI = (function() {
         try {
             // Try network first
             const data = await get('/stocks', params);
-            
+
+            // Check for seeding status
+            if (data.status === 'seeding') {
+                console.log('[API] Backend is seeding data...');
+
+                // If we have cached data, use it but indicate seeding
+                const cached = await DividendDB.getCachedStocks({
+                    category: category !== 'all' ? category : null,
+                    minYield,
+                    minSafety,
+                    checkFreshness: false
+                });
+
+                if (cached && cached.length > 0) {
+                    return {
+                        stocks: cached,
+                        total: cached.length,
+                        fetchedAt: null,
+                        fromCache: true,
+                        isSeeding: true // Hint to UI that data might update soon
+                    };
+                }
+
+                // If no cache, return empty with seeding flag
+                return {
+                    stocks: [],
+                    total: 0,
+                    fetchedAt: null,
+                    fromCache: false,
+                    isSeeding: true
+                };
+            }
+
             // Cache the results for offline use
             if (data.stocks && data.stocks.length > 0) {
                 await DividendDB.cacheStocks(data.stocks);
-                
+
                 // Save trend snapshots for each stock
-                for (const stock of data.stocks) {
-                    await DividendDB.saveTrendSnapshot(stock.ticker, stock);
-                }
+                // Run in background (don't await) to speed up UI
+                (async () => {
+                    for (const stock of data.stocks) {
+                        await DividendDB.saveTrendSnapshot(stock.ticker, stock);
+                    }
+                })();
             }
 
             return {
@@ -169,7 +204,7 @@ const DividendAPI = (function() {
             };
         } catch (error) {
             console.warn('[API] Network request failed, trying cache:', error.message);
-            
+
             // Fall back to cache
             const cached = await DividendDB.getCachedStocks({
                 category: category !== 'all' ? category : null,
@@ -270,7 +305,7 @@ const DividendAPI = (function() {
     // ========================================================================
     // DATA REFRESH
     // ========================================================================
-    
+
     /**
      * Forces a refresh of all stock data.
      * Use sparingly - the backend will rate-limit yfinance calls.
@@ -286,7 +321,7 @@ const DividendAPI = (function() {
     async function shouldRefresh() {
         const lastFetch = await DividendDB.getSetting('lastFetchTime');
         if (!lastFetch) return true;
-        
+
         const hoursSinceLastFetch = (Date.now() - lastFetch) / (1000 * 60 * 60);
         return hoursSinceLastFetch >= 1;
     }
@@ -301,7 +336,7 @@ const DividendAPI = (function() {
     // ========================================================================
     // HEALTH CHECK
     // ========================================================================
-    
+
     /**
      * Checks if the API is reachable.
      */
@@ -318,7 +353,7 @@ const DividendAPI = (function() {
     // ========================================================================
     // PUBLIC API
     // ========================================================================
-    
+
     return {
         // Data fetching
         getStocks,
@@ -326,12 +361,12 @@ const DividendAPI = (function() {
         getTopStocks,
         getTrends,
         getSectors,
-        
+
         // Refresh
         refreshAllData,
         shouldRefresh,
         recordFetchTime,
-        
+
         // Status
         healthCheck,
         get isOnline() { return isOnline; }

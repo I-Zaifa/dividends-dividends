@@ -15,13 +15,13 @@
  * This is the "glue" code that makes all the pieces work together.
  */
 
-const DividendApp = (function() {
+const DividendApp = (function () {
     'use strict';
 
     // ========================================================================
     // STATE
     // ========================================================================
-    
+
     let currentView = 'discover';
     let currentFilter = 'all';
     let settings = {
@@ -35,7 +35,7 @@ const DividendApp = (function() {
     // ========================================================================
     // DOM REFERENCES
     // ========================================================================
-    
+
     const elements = {};
 
     function cacheElements() {
@@ -44,33 +44,33 @@ const DividendApp = (function() {
         elements.cardStack = document.getElementById('cardStack');
         elements.filterBar = document.getElementById('filterBar');
         elements.toastContainer = document.getElementById('toastContainer');
-        
+
         // Views
         elements.discoverView = document.getElementById('discoverView');
         elements.portfolioView = document.getElementById('portfolioView');
         elements.trendsView = document.getElementById('trendsView');
         elements.settingsView = document.getElementById('settingsView');
-        
+
         // Portfolio elements
         elements.portfolioList = document.getElementById('portfolioList');
         elements.portfolioEmpty = document.getElementById('portfolioEmpty');
         elements.portfolioCount = document.getElementById('portfolioCount');
         elements.avgYield = document.getElementById('avgYield');
         elements.portfolioBadge = document.getElementById('portfolioBadge');
-        
+
         // Buttons
         elements.refreshBtn = document.getElementById('refreshBtn');
         elements.passBtn = document.getElementById('passBtn');
         elements.likeBtn = document.getElementById('likeBtn');
         elements.undoBtn = document.getElementById('undoBtn');
-        
+
         // Settings
         elements.minYieldSetting = document.getElementById('minYieldSetting');
         elements.minSafetySetting = document.getElementById('minSafetySetting');
         elements.autoRefreshSetting = document.getElementById('autoRefreshSetting');
         elements.clearHistoryBtn = document.getElementById('clearHistoryBtn');
         elements.exportBtn = document.getElementById('exportBtn');
-        
+
         // Modal
         elements.stockModal = document.getElementById('stockModal');
         elements.modalClose = document.getElementById('modalClose');
@@ -81,7 +81,7 @@ const DividendApp = (function() {
     // ========================================================================
     // INITIALIZATION
     // ========================================================================
-    
+
     /**
      * Main initialization function.
      * Call this when the DOM is ready.
@@ -132,17 +132,20 @@ const DividendApp = (function() {
      */
     function hideLoader() {
         if (elements.appLoader) {
-            elements.appLoader.classList.add('hidden');
+            // Reduced to 800ms for better responsiveness while keeping some "style"
             setTimeout(() => {
-                elements.appLoader.style.display = 'none';
-            }, 300);
+                elements.appLoader.classList.add('hidden');
+                setTimeout(() => {
+                    elements.appLoader.style.display = 'none';
+                }, 300);
+            }, 800);
         }
     }
 
     // ========================================================================
     // DATA LOADING
     // ========================================================================
-    
+
     /**
      * Loads stock data and initializes the card swiper.
      */
@@ -173,16 +176,53 @@ const DividendApp = (function() {
                 showToast('Using cached data', 'info');
             }
 
+            // Handle seeding state
+            if (data.isSeeding) {
+                if (elements.cardStack) {
+                    elements.cardStack.innerHTML = `
+                        <div style="text-align: center; padding: 48px; color: var(--text-muted);">
+                            <div style="font-size: 2rem; margin-bottom: 16px;">🌱</div>
+                            <div style="margin-bottom: 8px; font-weight: bold;">Initializing Database</div>
+                            <div style="font-size: 0.875rem;">First-time setup in progress...</div>
+                            <div style="font-size: 0.75rem; margin-top: 8px; opacity: 0.7;">Check back in a minute</div>
+                            <button onclick="DividendApp.refresh()" style="margin-top: 16px; padding: 8px 16px; background: var(--bg-secondary); border: 1px solid var(--accent-primary); border-radius: 8px; color: var(--accent-primary); cursor: pointer;">
+                                Check Status
+                            </button>
+                        </div>
+                    `;
+                }
+                // If we also have some cached data (from previous partial seed?), we might want to show it?
+                // The API logic returns `stocks: cached` if available even if seeding.
+                // So if data.stocks has items, we should probably proceed to show them BUT show a toast or banner.
+            }
+
             // Get swiped tickers to filter out already-seen stocks
             const swipedTickers = await DividendDB.getSwipedTickers();
-            const unseenStocks = data.stocks.filter(s => !swipedTickers.has(s.ticker));
+
+            // Filter stocks
+            const unseenStocks = (data.stocks || []).filter(s => !swipedTickers.has(s.ticker));
 
             // Initialize card swiper
-            CardSwiper.init(elements.cardStack, unseenStocks, {
-                onSwipeRight: handleLike,
-                onSwipeLeft: handlePass,
-                onEmpty: handleEmpty
-            });
+            // If we have stocks (even if seeding), show them
+            if (unseenStocks.length > 0) {
+                if (data.isSeeding) {
+                    showToast('Background update in progress...', 'info');
+                }
+                CardSwiper.init(elements.cardStack, unseenStocks, {
+                    onSwipeRight: handleLike,
+                    onSwipeLeft: handlePass,
+                    onEmpty: handleEmpty
+                });
+            } else if (!data.isSeeding) {
+                // legitimate empty state handled by swiper or Empty handler, 
+                // but if init wasn't called (0 stocks), swiper might need manual empty state?
+                // CardSwiper.init handles empty array? Let's assume it might not replace innerHTML if empty.
+                // Let's check CardSwiper.init. If it doesn't handle empty, we need to.
+                // Assuming it does based on previous code.
+                if (data.stocks.length === 0) {
+                    handleEmpty();
+                }
+            }
 
             // Record fetch time
             if (!data.fromCache) {
@@ -192,7 +232,7 @@ const DividendApp = (function() {
         } catch (error) {
             console.error('[App] Failed to load stocks:', error);
             showToast('Failed to load data. Please try again.', 'error');
-            
+
             // Show error state in card stack
             if (elements.cardStack) {
                 elements.cardStack.innerHTML = `
@@ -220,22 +260,22 @@ const DividendApp = (function() {
     // ========================================================================
     // SWIPE HANDLERS
     // ========================================================================
-    
+
     /**
      * Called when user swipes right (likes/saves a stock).
      */
     async function handleLike(stock) {
         console.log(`[App] Liked: ${stock.ticker}`);
-        
+
         // Save to portfolio
         await DividendDB.addToPortfolio(stock);
-        
+
         // Record in swipe history
         await DividendDB.recordSwipe(stock.ticker, 'like');
-        
+
         // Update badge
         await updatePortfolioBadge();
-        
+
         showToast(`Added ${stock.ticker} to portfolio`, 'success');
     }
 
@@ -244,7 +284,7 @@ const DividendApp = (function() {
      */
     async function handlePass(stock) {
         console.log(`[App] Passed: ${stock.ticker}`);
-        
+
         // Record in swipe history (so we don't show it again)
         await DividendDB.recordSwipe(stock.ticker, 'pass');
     }
@@ -261,17 +301,17 @@ const DividendApp = (function() {
      */
     async function handleUndo() {
         const undone = CardSwiper.undo();
-        
+
         if (undone) {
             // Remove from history
             await DividendDB.removeSwipe(undone.stock.ticker);
-            
+
             // If it was a like, remove from portfolio too
             if (undone.direction === 'right') {
                 await DividendDB.removeFromPortfolio(undone.stock.ticker);
                 await updatePortfolioBadge();
             }
-            
+
             showToast(`Undid ${undone.stock.ticker}`, 'info');
         }
     }
@@ -279,7 +319,7 @@ const DividendApp = (function() {
     // ========================================================================
     // VIEW NAVIGATION
     // ========================================================================
-    
+
     /**
      * Switches to a different view.
      */
@@ -312,7 +352,7 @@ const DividendApp = (function() {
     // ========================================================================
     // PORTFOLIO VIEW
     // ========================================================================
-    
+
     /**
      * Renders the portfolio view.
      */
@@ -364,7 +404,7 @@ const DividendApp = (function() {
      */
     async function updatePortfolioBadge() {
         const stats = await DividendDB.getPortfolioStats();
-        
+
         if (stats.count > 0) {
             elements.portfolioBadge.textContent = stats.count;
             elements.portfolioBadge.style.display = 'flex';
@@ -376,7 +416,7 @@ const DividendApp = (function() {
     // ========================================================================
     // TRENDS VIEW
     // ========================================================================
-    
+
     /**
      * Renders the trends view.
      */
@@ -409,7 +449,7 @@ const DividendApp = (function() {
 
         // Render trend cards
         let html = '<div style="display: flex; flex-direction: column; gap: 12px;">';
-        
+
         for (const ticker of sortedTickers.slice(0, 20)) {
             const trends = await DividendDB.getTrendData(ticker);
             if (trends.length < 2) continue;
@@ -437,16 +477,16 @@ const DividendApp = (function() {
     // ========================================================================
     // STOCK DETAIL MODAL
     // ========================================================================
-    
+
     /**
      * Shows the stock detail modal.
      */
     async function showStockDetail(ticker) {
         try {
             const stock = await DividendAPI.getStockDetail(ticker);
-            
+
             elements.modalTitle.textContent = `${stock.ticker} - ${stock.name}`;
-            
+
             elements.modalBody.innerHTML = `
                 <div style="display: grid; gap: 16px;">
                     <!-- Price and yield -->
@@ -531,7 +571,7 @@ const DividendApp = (function() {
                     </div>
                 </div>
             `;
-            
+
             elements.stockModal.classList.add('visible');
         } catch (error) {
             console.error('[App] Failed to load stock detail:', error);
@@ -549,13 +589,13 @@ const DividendApp = (function() {
     // ========================================================================
     // FILTERS
     // ========================================================================
-    
+
     /**
      * Sets the category filter and reloads stocks.
      */
     async function setFilter(filter) {
         if (filter === currentFilter) return;
-        
+
         currentFilter = filter;
 
         // Update active pill
@@ -570,7 +610,7 @@ const DividendApp = (function() {
     // ========================================================================
     // SETTINGS
     // ========================================================================
-    
+
     /**
      * Loads settings from IndexedDB.
      */
@@ -617,7 +657,7 @@ const DividendApp = (function() {
      */
     function startAutoRefresh() {
         if (refreshInterval) return;
-        
+
         // Check every hour
         refreshInterval = setInterval(async () => {
             if (await DividendAPI.shouldRefresh()) {
@@ -656,7 +696,7 @@ const DividendApp = (function() {
      */
     async function exportPortfolio() {
         const csv = await DividendDB.exportPortfolioCSV();
-        
+
         if (!csv) {
             showToast('Portfolio is empty', 'error');
             return;
@@ -677,7 +717,7 @@ const DividendApp = (function() {
     // ========================================================================
     // EVENT LISTENERS
     // ========================================================================
-    
+
     /**
      * Sets up all event listeners.
      */
@@ -730,7 +770,7 @@ const DividendApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (currentView !== 'discover') return;
-            
+
             if (e.key === 'ArrowLeft') {
                 CardSwiper.swipeLeft();
             } else if (e.key === 'ArrowRight') {
@@ -744,7 +784,7 @@ const DividendApp = (function() {
     // ========================================================================
     // OFFLINE HANDLING
     // ========================================================================
-    
+
     /**
      * Updates UI based on online status.
      */
@@ -759,7 +799,7 @@ const DividendApp = (function() {
     // ========================================================================
     // UTILITIES
     // ========================================================================
-    
+
     /**
      * Shows a toast notification.
      */
@@ -767,7 +807,7 @@ const DividendApp = (function() {
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
         toast.textContent = message;
-        
+
         elements.toastContainer?.appendChild(toast);
 
         // Remove after 3 seconds
@@ -801,7 +841,7 @@ const DividendApp = (function() {
     // ========================================================================
     // PUBLIC API
     // ========================================================================
-    
+
     return {
         init,
         refresh,
