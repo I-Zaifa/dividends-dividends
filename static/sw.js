@@ -8,7 +8,7 @@
  * - Fonts: Cache-first with long TTL
  */
 
-const CACHE_VERSION = 'v1.0.0';
+const CACHE_VERSION = 'v1.0.1';
 const STATIC_CACHE = `dividend-static-${CACHE_VERSION}`;
 const API_CACHE = `dividend-api-${CACHE_VERSION}`;
 
@@ -17,6 +17,7 @@ const STATIC_ASSETS = [
     '/index.html',
     '/manifest.json',
     '/css/styles.css',
+    '/js/config.js',
     '/js/db.js',
     '/js/api.js',
     '/js/cards.js',
