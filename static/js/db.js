@@ -339,6 +339,7 @@ const DividendDB = (function() {
      * Caches stock data for offline use.
      */
     async function cacheStocks(stocks) {
+        await init();
         const tx = db.transaction(STORES.STOCKS, 'readwrite');
         const store = tx.objectStore(STORES.STOCKS);
         
