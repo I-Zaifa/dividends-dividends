@@ -480,8 +480,8 @@ def load_cached_snapshot() -> Optional[Dict]:
 # API ENDPOINTS
 # ============================================================================
 
-@app.get("/")
-async def root():
+@app.get("/health")
+async def health_check():
     """Health check endpoint."""
     return {"status": "ok", "service": "Dividend Hunter API"}
 
