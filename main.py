@@ -126,21 +126,37 @@ def calculate_dividend_metrics(ticker: str) -> Optional[Dict[str, Any]]:
         stock = yf.Ticker(ticker)
         info = stock.info
         
-        # Skip if no dividend yield (non-dividend payers)
-        # NOTE: yfinance returns dividend yield as decimal (e.g., 0.05 = 5%)
-        # We convert to percentage for storage and display
-        dividend_yield = info.get("dividendYield", 0) or 0
-        if dividend_yield == 0:
-            return None
-        
-        # Convert to percentage (0.05 -> 5.0)
-        dividend_yield_pct = dividend_yield * 100
-        
         # Get historical dividends for trend analysis
         # We want at least 5 years of data for meaningful trends
         dividends = stock.dividends
         if dividends.empty:
             return None
+        
+        # Get dividend yield with smart detection
+        # CRITICAL FIX: yfinance is inconsistent with dividendYield format
+        # Sometimes it returns decimal (0.05 = 5%), sometimes percentage (5.0 = 5%)
+        dividend_yield_raw = info.get("dividendYield", 0) or 0
+        if dividend_yield_raw == 0:
+            return None
+        
+        # Smart detection: if value > 0.2, it's already in percentage form
+        # if value <= 0.2, it's in decimal form and needs conversion
+        # Rationale: Real S&P 500 yields below 0.2% (20 basis points) are extremely rare
+        if dividend_yield_raw > 0.2:
+            # Already in percentage (e.g., 0.5 to 15.0 = 0.5% to 15%)
+            dividend_yield_pct = dividend_yield_raw
+        else:
+            # In decimal form (e.g., 0.0001 to 0.15 → 0.01% to 15%)
+            dividend_yield_pct = dividend_yield_raw * 100
+        
+        # Sanity check: dividend yields should rarely exceed 20%
+        # If over 50%, likely data quality issue - skip this stock
+        if dividend_yield_pct > 50:
+            logger.warning(f"{ticker}: Yield {dividend_yield_pct:.2f}% seems incorrect, skipping")
+            return None
+        
+        # Get annual dividend for display
+        annual_dividend = info.get("dividendRate", 0) or 0
         
         # Convert to list of {date, amount} for storage
         dividend_history = [
@@ -157,9 +173,6 @@ def calculate_dividend_metrics(ticker: str) -> Optional[Dict[str, Any]]:
         # Determine consecutive years of dividend payments
         consecutive_years = calculate_consecutive_years(dividends)
         
-        # Annual dividend amount
-        annual_dividend = info.get("dividendRate", 0) or 0
-        
         # Ex-dividend date
         ex_dividend_date = info.get("exDividendDate")
         if ex_dividend_date:
@@ -169,8 +182,11 @@ def calculate_dividend_metrics(ticker: str) -> Optional[Dict[str, Any]]:
         frequency = determine_payment_frequency(dividends)
         
         # Safety score (0-100) based on multiple factors
+        # NOTE: yfinance returns payout_ratio as decimal (e.g., 0.50 = 50%)
+        # Convert to percentage for calculate_safety_score()
+        payout_ratio_pct = payout_ratio * 100 if payout_ratio else 0
         safety_score = calculate_safety_score(
-            payout_ratio=payout_ratio,
+            payout_ratio=payout_ratio_pct,
             consecutive_years=consecutive_years,
             growth_rate=growth_rate,
             dividend_yield=dividend_yield_pct
