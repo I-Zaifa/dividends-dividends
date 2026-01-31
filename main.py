@@ -49,19 +49,9 @@ app.add_middleware(
 
 # Paths for data persistence
 DATA_DIR = Path(__file__).parent / "data"
-
-# Ensure data directory exists (critical for Railway deployment)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-logger.info(f"Data directory: {DATA_DIR.absolute()}")
-
 HISTORICAL_FILE = DATA_DIR / "historical_dividends.json"
 SNAPSHOT_FILE = DATA_DIR / "latest_snapshot.json"
-
-# Log cache status on startup
-if SNAPSHOT_FILE.exists():
-    logger.info(f"✅ Found cached snapshot: {SNAPSHOT_FILE.stat().st_size / 1024 / 1024:.2f} MB")
-else:
-    logger.warning("⚠️  No cached snapshot found - will fetch on first request")
 
 # Thread pool for parallel yfinance calls (yfinance is blocking)
 executor = ThreadPoolExecutor(max_workers=10)
