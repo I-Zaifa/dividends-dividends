@@ -49,9 +49,19 @@ app.add_middleware(
 
 # Paths for data persistence
 DATA_DIR = Path(__file__).parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
+
+# Ensure data directory exists (critical for Railway deployment)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"Data directory: {DATA_DIR.absolute()}")
+
 HISTORICAL_FILE = DATA_DIR / "historical_dividends.json"
 SNAPSHOT_FILE = DATA_DIR / "latest_snapshot.json"
+
+# Log cache status on startup
+if SNAPSHOT_FILE.exists():
+    logger.info(f"✅ Found cached snapshot: {SNAPSHOT_FILE.stat().st_size / 1024 / 1024:.2f} MB")
+else:
+    logger.warning("⚠️  No cached snapshot found - will fetch on first request")
 
 # Thread pool for parallel yfinance calls (yfinance is blocking)
 executor = ThreadPoolExecutor(max_workers=10)
@@ -127,9 +137,14 @@ def calculate_dividend_metrics(ticker: str) -> Optional[Dict[str, Any]]:
         info = stock.info
         
         # Skip if no dividend yield (non-dividend payers)
+        # NOTE: yfinance returns dividend yield as decimal (e.g., 0.05 = 5%)
+        # We convert to percentage for storage and display
         dividend_yield = info.get("dividendYield", 0) or 0
         if dividend_yield == 0:
             return None
+        
+        # Convert to percentage (0.05 -> 5.0)
+        dividend_yield_pct = dividend_yield * 100
         
         # Get historical dividends for trend analysis
         # We want at least 5 years of data for meaningful trends
@@ -168,12 +183,12 @@ def calculate_dividend_metrics(ticker: str) -> Optional[Dict[str, Any]]:
             payout_ratio=payout_ratio,
             consecutive_years=consecutive_years,
             growth_rate=growth_rate,
-            dividend_yield=dividend_yield
+            dividend_yield=dividend_yield_pct
         )
         
         # Composite ranking score for auto-sorting
         rank_score = calculate_rank_score(
-            dividend_yield=dividend_yield,
+            dividend_yield=dividend_yield_pct,
             growth_rate=growth_rate,
             safety_score=safety_score,
             consecutive_years=consecutive_years
@@ -185,7 +200,7 @@ def calculate_dividend_metrics(ticker: str) -> Optional[Dict[str, Any]]:
             "sector": info.get("sector", "Unknown"),
             "industry": info.get("industry", "Unknown"),
             "price": info.get("currentPrice", info.get("regularMarketPrice", 0)),
-            "dividendYield": round(dividend_yield, 2),  # yfinance already returns percentage
+            "dividendYield": round(dividend_yield_pct, 2),  # Converted to percentage
             "annualDividend": round(annual_dividend, 2),
             "payoutRatio": round(payout_ratio * 100, 2) if payout_ratio else 0,
             "exDividendDate": ex_dividend_date,
@@ -199,7 +214,7 @@ def calculate_dividend_metrics(ticker: str) -> Optional[Dict[str, Any]]:
             "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow", 0),
             "marketCap": info.get("marketCap", 0),
             "peRatio": info.get("trailingPE", 0),
-            "category": categorize_stock(dividend_yield, growth_rate, safety_score, consecutive_years),
+            "category": categorize_stock(dividend_yield_pct, growth_rate, safety_score, consecutive_years),
             "fetchedAt": datetime.now().isoformat()
         }
         
@@ -356,7 +371,7 @@ def calculate_safety_score(
     
     # Yield sanity check (10 point adjustment)
     # Super high yields often precede cuts
-    # NOTE: dividend_yield is now in percentage form (e.g., 5.0 = 5%)
+    # NOTE: dividend_yield is in percentage form (e.g., 5.0 = 5%)
     if dividend_yield > 10:  # Over 10%
         score -= 15  # Warning flag
     elif dividend_yield > 8:  # Over 8%
@@ -382,7 +397,7 @@ def calculate_rank_score(
     """
     # Normalize each factor to 0-100 scale
     # NOTE: dividend_yield is in percentage form (e.g., 5.0 = 5%)
-    yield_score = min(dividend_yield * 10, 100)  # 10% yield = 100 (10 * 10 = 100)
+    yield_score = min(dividend_yield * 10, 100)  # 10% yield = 100 points
     growth_score = min(max(growth_rate + 10, 0) * 5, 100)  # -10% to +10% mapped to 0-100
     track_score = min(consecutive_years * 4, 100)  # 25 years = 100
     

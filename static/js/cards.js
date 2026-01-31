@@ -532,8 +532,6 @@ const CardSwiper = (function () {
         switch (category) {
             case 'long_gamma': return 'Long Gamma';
             case 'immediate': return 'Immediate';
-            case 'longshot': return 'Long Shot';
-            case 'balanced': return 'Balanced';
             default: return category || 'Unknown';
         }
     }
