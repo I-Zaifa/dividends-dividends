@@ -356,9 +356,10 @@ def calculate_safety_score(
     
     # Yield sanity check (10 point adjustment)
     # Super high yields often precede cuts
-    if dividend_yield > 0.10:  # Over 10%
+    # NOTE: dividend_yield is now in percentage form (e.g., 5.0 = 5%)
+    if dividend_yield > 10:  # Over 10%
         score -= 15  # Warning flag
-    elif dividend_yield > 0.08:  # Over 8%
+    elif dividend_yield > 8:  # Over 8%
         score -= 5
     
     return max(0, min(100, score))  # Clamp to 0-100
@@ -380,7 +381,8 @@ def calculate_rank_score(
     - 15% Track record (consecutive years)
     """
     # Normalize each factor to 0-100 scale
-    yield_score = min(dividend_yield * 100 * 10, 100)  # 10% yield = 100
+    # NOTE: dividend_yield is in percentage form (e.g., 5.0 = 5%)
+    yield_score = min(dividend_yield * 10, 100)  # 10% yield = 100 (10 * 10 = 100)
     growth_score = min(max(growth_rate + 10, 0) * 5, 100)  # -10% to +10% mapped to 0-100
     track_score = min(consecutive_years * 4, 100)  # 25 years = 100
     
@@ -399,13 +401,15 @@ def categorize_stock(yield_pct: float, growth_rate: float, safety_score: int, co
     Categories for filtering:
     - 'long_gamma': Consistent payers (8+ years, safe, growing)
     - 'immediate': High yield (4%+)
+    
+    NOTE: yield_pct is now in percentage form (e.g., 4.0 = 4%)
     """
     if consecutive_years >= 8 and safety_score >= 60 and growth_rate > 3:
         return "long_gamma"
-    elif yield_pct >= 0.04: # 4% yield
+    elif yield_pct >= 4:  # 4% yield (yield_pct is already percentage)
         return "immediate"
     else:
-        return "other"
+        return "long_gamma"  # Default to long_gamma instead of 'other'
 
 
 # ============================================================================
@@ -468,21 +472,23 @@ def save_snapshot(stocks: List[Dict]):
 
 def load_cached_snapshot() -> Optional[Dict]:
     """
-    Returns cached snapshot if it's less than 1 hour old.
-    This avoids hammering yfinance on every request.
+    Returns cached snapshot if it exists.
+    Always returns data if available - never return None when data exists.
+    The frontend can decide whether to show "update available" based on age.
     """
     if not SNAPSHOT_FILE.exists():
         return None
     
-    with open(SNAPSHOT_FILE, "r") as f:
-        snapshot = json.load(f)
-    
-    fetched_at = datetime.fromisoformat(snapshot["fetchedAt"])
-    today = datetime.now()
-    if today - fetched_at < timedelta(days=7):
+    try:
+        with open(SNAPSHOT_FILE, "r") as f:
+            snapshot = json.load(f)
+        
+        # Always return cached data if it exists - never discard valid data
+        # The 7-day check is for triggering refresh prompts, not for discarding data
         return snapshot
-    
-    return None
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error(f"Failed to load cached snapshot: {e}")
+        return None
 
 
 # ============================================================================
