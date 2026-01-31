@@ -1,7 +1,6 @@
 # Dividend Hunter
 
-![Dividend Hunter Screenshot](Screenshot%202026.png)
-
+<img src="Screenshot%202026.png" alt="Dividend Hunter Screenshot" width="40%"/>
 Simple web app for screening dividend stocks. Pulls data from Yahoo Finance via yfinance and refreshes hourly. Shows key metrics for each stock and lets you save the ones you like or pass on others. Build a portfolio, filter by minimum yield or safety score, track average yield, and export to CSV.
 
 Live site: https://dividend-hunter.up.railway.app
